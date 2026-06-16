@@ -14,27 +14,40 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-const linesRef = ref(db, 'drawing');
+const sessionRef = ref(db, 'workspace');
 
-const canvas = document.getElementById('board');
-const ctx = canvas.getContext('2d', { willReadFrequently: true });
+// Setup Dual Canvases
+const paintCanvas = document.getElementById('paintBoard');
+const pCtx = paintCanvas.getContext('2d');
+const fxCanvas = document.getElementById('fxBoard');
+const fCtx = fxCanvas.getContext('2d');
+
+// UI Elements
+const chatBox = document.getElementById('chatBox');
+const textInput = document.getElementById('textInput');
+const sendTextBtn = document.getElementById('sendTextBtn');
+const photoInput = document.getElementById('photoInput');
 const clearBtn = document.getElementById('clearBtn');
-const pingBtn = document.getElementById('pingBtn');
+
+// Secret Topic for Free Real-Time Notifications
+const NTFY_TOPIC = "ourcanvas_shloke_ananta_privatespace";
 
 let width, height;
 let particles = [];
-let hue = 0; // Dynamic color shifting
+let hue = 0;
 
 function resize() {
-  width = canvas.width = window.innerWidth;
-  height = canvas.height = window.innerHeight;
+  width = paintCanvas.width = fxCanvas.width = window.innerWidth;
+  height = paintCanvas.height = fxCanvas.height = window.innerHeight;
+  pCtx.lineWidth = 5;
+  pCtx.lineCap = 'round';
+  pCtx.lineJoin = 'round';
 }
 window.addEventListener('resize', resize);
 resize();
 
 let isDrawing = false;
-let lastX = 0;
-let lastY = 0;
+let lastX = 0, lastY = 0;
 
 function getCoordinates(e) {
   if (e.touches && e.touches.length > 0) {
@@ -43,124 +56,157 @@ function getCoordinates(e) {
   return { x: e.clientX, y: e.clientY };
 }
 
-function startDrawing(e) {
-  isDrawing = true;
-  const coords = getCoordinates(e);
-  lastX = coords.x;
-  lastY = coords.y;
-}
+// Drawing Logic
+paintCanvas.addEventListener('mousedown', (e) => { isDrawing = true; const c = getCoordinates(e); lastX = c.x; lastY = c.y; });
+paintCanvas.addEventListener('touchstart', (e) => { isDrawing = true; const c = getCoordinates(e); lastX = c.x; lastY = c.y; }, {passive:false});
 
-function stopDrawing() {
-  isDrawing = false;
-}
+paintCanvas.addEventListener('mousemove', drawAction);
+paintCanvas.addEventListener('touchmove', (e) => { e.preventDefault(); drawAction(e); }, {passive:false});
 
-function draw(e) {
+window.addEventListener('mouseup', () => isDrawing = false);
+window.addEventListener('touchend', () => isDrawing = false);
+
+function drawAction(e) {
   if (!isDrawing) return;
-  e.preventDefault(); 
+  const c = getCoordinates(e);
   
-  const coords = getCoordinates(e);
-  const currentX = coords.x;
-  const currentY = coords.y;
-
-  // Sync core coordinates to Firebase
-  push(linesRef, { 
-    x0: lastX, 
-    y0: lastY, 
-    x1: currentX, 
-    y1: currentY,
-    h: hue 
+  push(sessionRef, {
+    type: 'draw',
+    x0: lastX, y0: lastY,
+    x1: c.x, y1: c.y,
+    color: `hsl(${hue}, 100%, 60%)`
   });
   
-  lastX = currentX;
-  lastY = currentY;
+  lastX = c.x;
+  lastY = c.y;
 }
 
-// Intense Neon Rendering & Particle Generation
-function renderLine(x0, y0, x1, y1, lineHue) {
-  // Glow Effect
-  ctx.shadowBlur = 15;
-  ctx.shadowColor = `hsl(${lineHue}, 100%, 60%)`;
-  ctx.lineWidth = 6;
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = `hsl(${lineHue}, 100%, 70%)`;
+// Send Realtime Push Notification via ntfy.sh (100% Free)
+function triggerNotification(messageText) {
+  fetch(`https://ntfy.sh/${NTFY_TOPIC}`, {
+    method: 'POST',
+    body: messageText,
+    headers: { 'Title': 'Our Canvas ✨' }
+  }).catch(err => console.log("Notification delay: ", err));
+}
 
-  ctx.beginPath();
-  ctx.moveTo(x0, y0);
-  ctx.lineTo(x1, y1);
-  ctx.stroke();
+// Send Text Message
+sendTextBtn.addEventListener('click', sendTextMessage);
+textInput.addEventListener('keypress', (e) => { if(e.key === 'Enter') sendTextMessage(); });
+
+function sendTextMessage() {
+  const msg = textInput.value.trim();
+  if(!msg) return;
+  push(sessionRef, { type: 'text', text: msg });
+  textInput.value = '';
+  triggerNotification("Sent a new message! 💬");
+}
+
+// Photo Processing & Compression to keep it free
+photoInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
   
-  // Reset shadow for performance
-  ctx.shadowBlur = 0;
+  const reader = new FileReader();
+  reader.onload = function(event) {
+    const img = new Image();
+    img.onload = function() {
+      // Compress picture dimensions to save database limits
+      const maxW = 800;
+      const scale = maxW / img.width;
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = maxW;
+      tempCanvas.height = img.height * scale;
+      const tCtx = tempCanvas.getContext('2d');
+      tCtx.drawImage(img, 0, 0, tempCanvas.width, tempCanvas.height);
+      
+      const compressedBase64 = tempCanvas.toDataURL('image/jpeg', 0.6);
+      push(sessionRef, { type: 'photo', data: compressedBase64 });
+      triggerNotification("Dropped a new photo on your screen! 📷");
+    };
+    img.src = event.target.result;
+  };
+  reader.readAsDataURL(file);
+});
 
-  // Generate 3D flying particles
-  for (let i = 0; i < 3; i++) {
-    particles.push({
-      x: x1,
-      y: y1,
-      vx: (Math.random() - 0.5) * 8, // Intense velocity
-      vy: (Math.random() - 0.5) * 8,
-      life: 1,
-      color: `hsl(${lineHue}, 100%, 60%)`
-    });
+// Sync Incoming Cloud Events
+onChildAdded(sessionRef, (snapshot) => {
+  const data = snapshot.val();
+  
+  if (data.type === 'draw') {
+    pCtx.strokeStyle = data.color;
+    pCtx.beginPath();
+    pCtx.moveTo(data.x0, data.y0);
+    pCtx.lineTo(data.x1, data.y1);
+    pCtx.stroke();
+    
+    // Spawn 3D floating particles on the FX layer
+    for (let i = 0; i < 2; i++) {
+      particles.push({
+        x: data.x1, y: data.y1,
+        vx: (Math.random() - 0.5) * 6,
+        vy: (Math.random() - 0.5) * 6,
+        life: 1, color: data.color
+      });
+    }
+  } 
+  else if (data.type === 'text') {
+    const el = document.createElement('div');
+    el.className = 'chat-msg';
+    el.innerText = data.text;
+    chatBox.appendChild(el);
+    chatBox.scrollTop = chatBox.scrollHeight;
+    setTimeout(() => el.remove(), 8000); // Messages gently vanish after 8 seconds
+  } 
+  else if (data.type === 'photo') {
+    const img = new Image();
+    img.onload = function() {
+      // Draw centered photo as background
+      const hRatio = paintCanvas.width / img.width;
+      const vRatio = paintCanvas.height / img.height;
+      const ratio = Math.min(hRatio, vRatio);
+      const centerShift_x = (paintCanvas.width - img.width * ratio) / 2;
+      const centerShift_y = (paintCanvas.height - img.height * ratio) / 2;  
+      pCtx.drawImage(img, 0, 0, img.width, img.height, centerShift_x, centerShift_y, img.width*ratio, img.height*ratio);
+    };
+    img.src = data.data;
   }
-}
+});
 
-// Animation Loop for Physics & Trails
-function animate() {
-  // Creates a fading trail effect instead of a hard clear
-  ctx.fillStyle = 'rgba(5, 5, 5, 0.05)';
-  ctx.fillRect(0, 0, width, height);
+// Clear Button
+clearBtn.addEventListener('click', () => set(sessionRef, null));
+onValue(sessionRef, (snapshot) => {
+  if (!snapshot.exists()) {
+    pCtx.clearRect(0, 0, width, height);
+    fCtx.clearRect(0, 0, width, height);
+    chatBox.innerHTML = '';
+    particles = [];
+  }
+});
 
-  // Slowly shift the color of the pen over time
-  hue += 0.5;
-  if (hue > 360) hue = 0;
-
-  // Update and draw particles
+// Independent Particles Rendering Loop (The FX Layer)
+function animateFX() {
+  fCtx.clearRect(0, 0, width, height);
+  hue += 0.8;
+  
   for (let i = particles.length - 1; i >= 0; i--) {
     let p = particles[i];
     p.x += p.vx;
     p.y += p.vy;
-    p.life -= 0.02; // Fade out speed
-
+    p.life -= 0.02;
+    
     if (p.life <= 0) {
       particles.splice(i, 1);
     } else {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 2 * p.life, 0, Math.PI * 2);
-      ctx.fillStyle = p.color;
-      ctx.fill();
+      fCtx.shadowBlur = 10;
+      fCtx.shadowColor = p.color;
+      fCtx.beginPath();
+      fCtx.arc(p.x, p.y, 3 * p.life, 0, Math.PI * 2);
+      fCtx.fillStyle = p.color;
+      fCtx.fill();
     }
   }
-  requestAnimationFrame(animate);
+  fCtx.shadowBlur = 0;
+  requestAnimationFrame(animateFX);
 }
-animate(); // Start the engine
-
-canvas.addEventListener('mousedown', startDrawing);
-canvas.addEventListener('mousemove', draw);
-canvas.addEventListener('mouseup', stopDrawing);
-canvas.addEventListener('mouseout', stopDrawing);
-canvas.addEventListener('touchstart', startDrawing, { passive: false });
-canvas.addEventListener('touchmove', draw, { passive: false });
-canvas.addEventListener('touchend', stopDrawing);
-
-onChildAdded(linesRef, (data) => {
-  const line = data.val();
-  renderLine(line.x0, line.y0, line.x1, line.y1, line.h);
-});
-
-clearBtn.addEventListener('click', () => {
-  set(linesRef, null);
-});
-
-onValue(linesRef, (snapshot) => {
-  if (!snapshot.exists()) {
-    // Hard wipe if the database is cleared
-    ctx.clearRect(0, 0, width, height);
-    particles = []; 
-  }
-});
-
-pingBtn.addEventListener('click', () => {
-  const textMessage = "I just left a neon surprise for you, Ananta! ✨ Go check our canvas.";
-  window.location.href = `https://wa.me/?text=${encodeURIComponent(textMessage)}`;
-});
+animateFX();
