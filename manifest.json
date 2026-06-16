@@ -1,0 +1,16 @@
+{
+  "name": "Our Canvas",
+  "short_name": "Canvas",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/104/104530.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
