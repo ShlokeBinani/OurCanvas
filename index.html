@@ -14,11 +14,19 @@
 </head>
 <body>
 
-  <canvas id="board"></canvas>
+  <canvas id="paintBoard"></canvas>
+  <canvas id="fxBoard"></canvas>
+
+  <div id="chatBox" class="chat-box"></div>
 
   <div class="controls">
+    <label for="photoInput" class="btn-icon">
+      📷
+      <input type="file" id="photoInput" accept="image/*" style="display:none;">
+    </label>
+    <input type="text" id="textInput" placeholder="Type a secret message..." autocomplete="off">
+    <button id="sendTextBtn">Send</button>
     <button id="clearBtn">Clear</button>
-    <button id="pingBtn">Ping</button>
   </div>
 
   <script type="module" src="app.js"></script>
